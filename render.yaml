@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: kav-ai
+    name: P
     runtime: node
     plan: free
     region: frankfurt
