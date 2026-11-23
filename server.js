@@ -68,15 +68,15 @@ const EXTRA = String(process.env.EXTRA_INSTRUCTION || '').replace(/\s+/g, ' ').t
 // the assistant answers on any topic from its general knowledge, except sexual content, profanity and crude content (see the filter below)
 const BROAD = ' יש לך ידע רחב בכל תחום, ואתה עונה בחופשיות ובפירוט על כל שאלה בכל נושא, כולל ספורט, חדשות, פוליטיקה, ביטחון, מדע, היסטוריה ותרבות.';
 // content filter, roughly a 'PG-13 / under 18' level: no sexual content, no profanity, no crude or vulgar language
-const FILTER_HINT = ' xxxx xxxx xxxxxxx xx xx xxxxx xxxx: xx xxxxx xxxxxx, xxxxxxx xx xxxx xxxx xxx xxxxx xxxxx xx xx xxxxxx xxxx xxxx. xx xxxxx xxxxx xxxx xx xx xxx xxx, xx xxxxxxxx, xx xxxxxxxx xxx xxxxxx xxxxx, xxx xx xxxxx xx xxxxxx. xxxxxxx xxxx, xxx xxxxxx xxxxx xxx xxx, בלי להסביר בפירוט ובלי לחזור על הדברים, והצע לעבור לנושא אחר. שאר הנושאים נשארים פתוחים כרגיל.';
+const FILTER_HINT = ' חשוב מאוד: הקו הזה משמש גם קטינים, ולכן אסור לך לדבר על תוכן מיני או פורנוגרפי, לתאר מין או איברי מין באופן מיני, או לכתוב סיפורים, בדיחות ושירים בעלי אופי מיני. אסור לך לקלל ולהשתמש בשפה גסה, וולגרית או בכינויי גנאי, גם אם המשתמש מבקש, מצטט, מתעקש, אומר שהוא מבוגר, או טוען שזה בדיחה, משחק תפקידים או סיפור. אם המשתמש מבקש דבר כזה, סרב בנימוס במשפט אחד קצר, בלי להסביר בפירוט ובלי לחזור על הדברים, והצע לעבור לנושא אחר. שאר הנושאים נשארים פתוחים כרגיל.';
 const BLOCKED_REPLY = 'מצטער אבל אני לא יכול לעזור בנושא הזה אפשר לשאול אותי על משהו אחר';
 const SAFETY = [
-  { category: 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', threshold: 'BLOCK_LOW_AND_ABOVE' },
+  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_LOW_AND_ABOVE' },
   { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
   { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
 ];
 // extra safety net on the final text: a short word list (the owner can replace it with BAD_WORDS="word1,word2,...")
-const BAD_WORDS = process.env.BAD_WORDS ? keyList(process.env.BAD_WORDS) : ['xx xxxx', 'xx xxxx', 'xxx', 'xxxxx', 'xxxxxx', 'כוס אמק', 'כוסעמק', 'xxxxxx', 'xxxx', 'xxxx', 'xxxxx', 'xxxxxxx'];
+const BAD_WORDS = process.env.BAD_WORDS ? keyList(process.env.BAD_WORDS) : ['כוס אמק', 'כוסעמק', 'כוס אמא', 'כוס אמא שלך', 'בן זונה', 'בנזונה', 'זונה', 'שרמוטה', 'מזדיין', 'תזדיין', 'להזדיין', 'הזדיין', 'זיין', 'זין', 'חרא', 'מניאק', 'פורנו', 'פורנוגרפיה', 'פורן', 'fuck', 'fucking', 'shit', 'bitch', 'porn', 'porno', 'dick', 'pussy', 'cunt', 'asshole', 'bastard'];
 const BAD_RE = BAD_WORDS.length ? new RegExp('(?<![\\u0590-\\u05FFa-z])[והבלכמש]{0,2}(?:' + BAD_WORDS.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')).join('|') + ')(?![\\u0590-\\u05FFa-z])', 'i') : null;
 const isBad = t => !!(BAD_RE && BAD_RE.test(String(t)));
 const wasBlocked = a => {
@@ -930,21 +930,31 @@ async function doTurn(s, q, id, T0, typed) {
     if (s.r) { del(s.r, s.d); s.r = ''; }
     const t1 = Date.now();
 
-    const a = await askModel(s.len === 'short' ? s.sys + SHORT_NOTE : s.sys, [...(s.base || []), ...s.h.slice(-8), { role: 'user', parts: [userPart] }], deadline, s);
-    const parts = (((a.candidates || [])[0] || {}).content || {}).parts || [];
-    let text = parts.filter(p => !p.thought).map(p => p.text || '').join('').trim();
-    if (!text && wasBlocked(a)) text = BLOCKED_REPLY;
-    if (!text) throw new Error('empty answer ' + JSON.stringify((a.promptFeedback || {})).slice(0, 100));
-    const ctl = parseCtl(text);
-    text = ctl.text || 'בסדר';
-    if (isBad(text)) text = BLOCKED_REPLY;
+    // a typed question with 18+ content is blocked before it reaches the model
+    const preBlocked = !!(typed && isBad(tq));
+    let text, ctl;
+    if (preBlocked) {
+      text = BLOCKED_REPLY;
+      ctl = { text, ctl: {}, q: '' };
+    } else {
+      const a = await askModel(s.len === 'short' ? s.sys + SHORT_NOTE : s.sys, [...(s.base || []), ...s.h.slice(-8), { role: 'user', parts: [userPart] }], deadline, s);
+      const parts = (((a.candidates || [])[0] || {}).content || {}).parts || [];
+      text = parts.filter(p => !p.thought).map(p => p.text || '').join('').trim();
+      if (!text && wasBlocked(a)) text = BLOCKED_REPLY;
+      if (!text) throw new Error('empty answer ' + JSON.stringify((a.promptFeedback || {})).slice(0, 100));
+      ctl = parseCtl(text);
+      text = ctl.text || 'בסדר';
+      // the transcript of a recorded question is checked as well as the answer
+      if (isBad(text) || isBad(ctl.q)) text = BLOCKED_REPLY;
+    }
     if (ctl.ctl.voice === 'male' || ctl.ctl.voice === 'female') s.vc = ctl.ctl.voice;
     else if (ctl.ctl.voice === 'default') s.vc = '';
     if (ctl.ctl.len === 'short') s.len = 'short';
     else if (ctl.ctl.len === 'long') s.len = '';
     if (ctl.ctl.pace === 'slow' || ctl.ctl.pace === 'fast') s.pace = ctl.ctl.pace;
     else if (ctl.ctl.pace === 'normal') s.pace = '';
-    const qtext = tq || ctl.q;
+    let qtext = tq || ctl.q;
+    if (isBad(qtext)) qtext = 'שאלה שנחסמה';
     const histQ = { role: 'user', parts: [{ text: qtext || '[שאלה קולית]' }] };
     // the history keeps text only (question and answer), read back later by the Yemot voice
     s.save = { qt: qtext || 'לא תומללה', at: text };
